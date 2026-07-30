@@ -10,8 +10,9 @@ Here's the problem: every bank and payment company keeps two records of the same
 
 RBI actually has a rule about this. Banks are required to reverse a failed transaction within a set number of days — T+1 for UPI/IMPS, and 5 days for ATM transactions — or pay the customer ₹100 per day as a penalty. That rule exists because this exact reconciliation gap is such a common, real problem in the industry. This project is a smaller version of the kind of system that would catch that gap early, before it turns into a customer complaint or a compliance issue.
 
-![LedgerMatch dashboard overview]
-(./screenshots/i1.png)
+![LedgerMatch dashboard overview](./screenshots/i1.png)
+
+
 
 ## Features
 
