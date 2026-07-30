@@ -1,0 +1,9 @@
+{
+  "name": "ledgermatch",
+  "private": true,
+  "scripts": {
+    "server": "cd server && npm install && npm run dev",
+    "client": "cd client && npm install && npm run dev",
+    "seed": "cd server && npm run seed"
+  }
+}
