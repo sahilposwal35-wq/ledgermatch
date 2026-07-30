@@ -15,6 +15,9 @@ function parseCsvBuffer(buffer) {
   return parse(buffer, { columns: true, skip_empty_lines: true, trim: true });
 }
 
+const AMOUNT_PATTERN = /^-?\d+(\.\d{1,2})?$/;
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/; // strictly YYYY-MM-DD — rejects ambiguous DD/MM vs MM/DD formats
+
 function validateRows(rows, requiredColumns, label) {
   if (rows.length === 0) {
     throw new Error(`${label} CSV has no rows`);
@@ -25,11 +28,22 @@ function validateRows(rows, requiredColumns, label) {
     throw new Error(`${label} CSV is missing required column(s): ${missing.join(', ')}. Expected headers: ${requiredColumns.join(', ')}`);
   }
   rows.forEach((row, i) => {
-    if (isNaN(parseFloat(row.amount))) {
-      throw new Error(`${label} CSV row ${i + 2}: "amount" is not a valid number ("${row.amount}")`);
+    const rawAmount = String(row.amount ?? '').trim();
+    if (!AMOUNT_PATTERN.test(rawAmount)) {
+      throw new Error(
+        `${label} CSV row ${i + 2}: "amount" must be a plain number with no commas or currency symbols ` +
+        `(got "${row.amount}"). Example: 1200.00, not 1,200.00 or ₹1,200.00`
+      );
     }
-    if (isNaN(new Date(row.date).getTime())) {
-      throw new Error(`${label} CSV row ${i + 2}: "date" is not a valid date ("${row.date}"). Use YYYY-MM-DD.`);
+    const rawDate = String(row.date ?? '').trim();
+    if (!DATE_PATTERN.test(rawDate)) {
+      throw new Error(
+        `${label} CSV row ${i + 2}: "date" must be in YYYY-MM-DD format (got "${row.date}"). ` +
+        `Formats like DD/MM/YYYY or MM/DD/YYYY are rejected because they can be misread as the wrong date.`
+      );
+    }
+    if (isNaN(new Date(rawDate).getTime())) {
+      throw new Error(`${label} CSV row ${i + 2}: "date" is not a real calendar date ("${row.date}")`);
     }
   });
 }

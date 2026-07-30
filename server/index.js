@@ -11,13 +11,31 @@ app.use(express.json());
 app.use('/api', reconciliationRoutes);
 app.use('/api', uploadRoutes);
 
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/health', (req, res) => {
+  const dbState = mongoose.connection.readyState; // 1 = connected
+  res.status(dbState === 1 ? 200 : 503).json({
+    status: dbState === 1 ? 'ok' : 'degraded',
+    database: ['disconnected', 'connected', 'connecting', 'disconnecting'][dbState] || 'unknown'
+  });
+});
 
-const PORT = process.env.PORT;
+// Catches anything that slips past individual routes — e.g. Multer's file-size-limit
+// error — so the client always gets clean JSON back instead of a raw HTML crash page
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  res.status(err.status || 500).json({ error: err.message || 'Something went wrong' });
+});
 
-mongoose.connect(process.env.MONGO_URI )
+const PORT = process.env.PORT || 5000;
+
+mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/ledgermatch')
   .then(() => {
     console.log('MongoDB connected');
     app.listen(PORT, () => console.log(`LedgerMatch API running on port ${PORT}`));
   })
   .catch(err => console.error('MongoDB connection error:', err));
+
+// If the connection drops after startup (network blip, Atlas maintenance, etc.),
+// log it instead of letting requests hang silently forever
+mongoose.connection.on('error', err => console.error('MongoDB runtime error:', err));
+mongoose.connection.on('disconnected', () => console.warn('MongoDB disconnected'));

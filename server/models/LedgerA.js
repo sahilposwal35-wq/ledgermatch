@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 
 // Ledger A = internal system record (e.g. our own order/payment ledger)
 const ledgerASchema = new mongoose.Schema({
-  txnId: { type: String, required: true, unique: true, index: true },
+  txnId: { type: String, required: true, index: true },
   amount: { type: Number, required: true },
   currency: { type: String, default: 'INR' },
   date: { type: Date, required: true, index: true },
@@ -12,5 +12,9 @@ const ledgerASchema = new mongoose.Schema({
   batchId: { type: String, index: true }, // which reconciliation batch this belongs to
   createdAt: { type: Date, default: Date.now }
 });
+
+// txnId only needs to be unique WITHIN a batch, not across the whole collection —
+// this lets the same sample data be uploaded under different batch IDs
+ledgerASchema.index({ batchId: 1, txnId: 1 }, { unique: true });
 
 module.exports = mongoose.model('LedgerA', ledgerASchema);

@@ -1,140 +1,248 @@
-# LedgerMatch — Automated Transaction Reconciliation Engine
+# LedgerMatch — A Bank Ledger Reconciliation Engine
 
-## The problem
-Every bank, payment processor, or fintech company keeps at least two records of
-the same transactions — e.g. an internal order ledger and a bank/payment-gateway
-settlement statement. These almost never match perfectly: timing differences,
-rounding, batched settlements, duplicate entries, and missing records are routine.
-Reconciling them — automatically, auditably, and safely — is a real job category
-inside banks (ops tech, payments, settlements) and one of the least "flashy" but
-most operationally critical problems in fintech.
+A full-stack MERN project that automatically checks if two sets of transaction records match — like comparing your own order records with your bank statement — and flags anything that doesn't add up.
 
-LedgerMatch automates this: it ingests two transaction ledgers, matches them
-using a tiered algorithm (exact → fuzzy → split → mismatch), flags exceptions
-for human review, and keeps an immutable audit trail of every decision — mirroring
-real banking controls like maker-checker approval.
+## Why I built this
 
-## Getting data in — two ways
+I wanted to build something closer to what a real fintech or banking team actually works on.
 
-You don't need real bank access to use this. Two supported paths, both feeding
-the same reconciliation engine and schema:
+Here's the problem: every bank and payment company keeps two records of the same transaction. Your app might say "order refunded," but the bank statement should show that money actually coming back. In practice, these two records rarely match up perfectly. Timing can be different, a fee might get deducted along the way, or one side simply never records the transaction at all. Someone, or something, has to go through and match these records up, and flag the ones that don't look right.
 
-**1. Seeded demo data (fastest — use this if you have nothing else)**
-```bash
-cd server && npm run seed
-```
-Generates `DEMO-BATCH-001` with ~200 transactions and controlled anomalies
-(exact/fuzzy/split/mismatch/missing), so the demo always looks realistic.
+RBI actually has a rule about this. Banks are required to reverse a failed transaction within a set number of days — T+1 for UPI/IMPS, and 5 days for ATM transactions — or pay the customer ₹100 per day as a penalty. That rule exists because this exact reconciliation gap is such a common, real problem in the industry. This project is a smaller version of the kind of system that would catch that gap early, before it turns into a customer complaint or a compliance issue.
 
-**2. Upload your own CSVs**
-Click "Upload your own CSVs" in the dashboard (collapsed by default), pick a
-batch ID, and upload two files:
+![LedgerMatch dashboard overview]
+(./screenshots/i1.png)
 
-- Ledger A (internal) columns: `txnId, amount, date, refId, description`
-- Ledger B (external/bank) columns: `statementId, amount, date, refId, narration`
+## Features
 
-`sample-data/ledgerA-sample.csv` and `sample-data/ledgerB-sample.csv` are
-included as a working example — try those first to see the expected format.
-Real sources for this in production: your own bank's statement export (often
-MT940 or CSV), or a payment gateway's settlement report (Razorpay/Stripe/PayU
-all provide these as downloadable CSVs). You can also export your own real
-bank statement CSV (redact the account number) and try that — the schema is
-deliberately generic enough to accept it with minor column renaming.
+- **Two-sided ledger matching** — upload or load two sets of transactions (your internal records and the bank's records) and let the engine compare them
+- **Four-tier matching logic**
+  1. **Exact match** — same amount, same date, same reference ID
+  2. **Fuzzy match** — same amount, but the date is off by a day or two (common when settlement gets delayed)
+  3. **Split match** — one bank transaction that's actually the sum of two smaller internal transactions (happens with batched payouts)
+  4. **Amount mismatch** — same transaction, but the amount is slightly different, usually because a fee was deducted
+- **Exception queue** — anything the system can't confidently match gets flagged for manual review instead of being silently ignored
+- **Maker-checker review** — approving or rejecting a flagged transaction requires typing a reason first. This is a real control banks use so no one can quietly change a record without explaining why
+- **Permanent audit trail** — every match and every manual decision gets logged and nothing is ever deleted or overwritten, so the full history is always visible
+- **Safe re-runs** — running the matching process again on the same batch doesn't create duplicate entries
+- **CSV upload** — bring your own transaction data instead of relying only on demo data, with basic validation for missing columns or bad values
+- **Sample/demo data included** — a seed script generates a realistic batch of transactions with built-in mismatches, so the project works out of the box even without real data
 
-Both paths write into the same `LedgerA`/`LedgerB` collections under whatever
-`batchId` you choose — reconciliation doesn't care which path the data came
-from.
+![Exception queue](./screenshots/i2.png)
 
-## Status: MVP complete
+![Match detail and maker-checker review](./screenshots/i3.png)
 
-- [x] Day 1-2: Schemas (LedgerA, LedgerB, Match, AuditLog) + seed script with controlled anomalies
-- [x] Day 3-6: Matching engine — exact / fuzzy / split / amount-mismatch / unmatched tiers
-- [x] Day 7-9: Maker-checker override endpoint + idempotent re-run (verified with an in-memory logic test — all 6 tiers + idempotency confirmed passing)
-- [x] Day 10-13: React dashboard — exception queue, match-detail drawer, breakdown chart, live audit trail
-- [x] Bonus: CSV upload endpoint (multer + csv-parse) as an alternative to seeded data — validates headers/amounts/dates before writing
-- [ ] Day 14: Deploy (Vercel + Render/Railway + Atlas) — do this last, once you've run it locally end-to-end yourself
+![Audit trail](./screenshots/i4.png)
 
-## How to demo it
+## Tech stack
 
-1. Follow "Running locally" below, then `npm run seed` to generate `DEMO-BATCH-001`
-2. Open the client, click **Run reconciliation**
-3. Point out the reconciliation-rate hero number and the match breakdown chart
-4. Filter to "Pending review", click into a fuzzy/split/mismatch row, walk through the drawer
-5. Try to approve a match **without** typing a reason — show that it's blocked (this is the interview talking point: the UI enforces the same control the backend enforces)
-6. Approve one with a reason, then show it land in the audit trail on the right, live
-7. Click **Run reconciliation** again — same batch, same count, no duplicates — this is your idempotency demo
+- **MongoDB** — stores both ledgers, the matches, and the audit log
+- **Express + Node** — backend API and the actual matching logic
+- **React (Vite)** — dashboard where you can see match results and review exceptions
+- **Multer + csv-parse** — handles CSV file uploads on the backend
 
-## Architecture
+## Project structure
 
 ```
-client (React)  --->  server (Express /api)  --->  matchingEngine.js  --->  MongoDB
-                                                          |
-                                                    AuditLog (append-only)
+ledgermatch/
+├── client/                      # React frontend (Vite)
+│   └── src/
+│       ├── components/          # StatBar, LedgerTable, MatchDrawer, AuditTrail, etc.
+│       ├── services/api.js      # all API calls to the backend
+│       ├── utils/format.js      # date/amount formatting helpers
+│       └── App.jsx              # main app, ties everything together
+│
+├── server/                      # Express backend
+│   ├── models/                  # LedgerA, LedgerB, Match, AuditLog (Mongoose schemas)
+│   ├── routes/                  # reconciliation.js, upload.js
+│   ├── services/
+│   │   └── matchingEngine.js    # the core matching logic — this is the main file
+│   ├── scripts/seed.js          # generates sample transaction data
+│   └── index.js                 # server entry point
+│
+└── sample-data/                 # example CSVs for the upload feature
 ```
 
-- **Tiered matching**: exact match first, then fuzzy (date/amount tolerance),
-  then split (batched settlements), then amount-mismatch (fee deductions/rounding),
-  with anything left over flagged unmatched.
-- **Idempotency**: re-running reconciliation on a batch clears and rebuilds its
-  matches rather than duplicating them — safe to re-run after a fix.
-- **Audit trail**: every automatic match and manual override writes an
-  append-only `AuditLog` entry. Application code never updates or deletes these.
-- **Maker-checker**: manual overrides require a `reason` and an `resolvedBy`
-  actor — mirrors real banking approval controls.
+## How to run it
 
-## Running locally
+You need MongoDB running somewhere (either install it locally, or make a free account on MongoDB Atlas — that's what I used).
 
-You need a MongoDB instance — either install it locally, or use a free
-[MongoDB Atlas](https://www.mongodb.com/cloud/atlas) cluster and drop its
-connection string into `server/.env` as `MONGO_URI`.
-
-**Terminal 1 — API server:**
+**1. Start the backend**
 ```bash
 cd server
-cp .env.example .env   # set MONGO_URI if not using local default
+cp .env.example .env
+# open .env and put your own MongoDB connection string in there
 npm install
-npm run seed            # generates a demo batch: DEMO-BATCH-001
-npm run dev              # http://localhost:5000
+npm run seed      # generates sample transaction data so you can try it right away
+npm run dev
 ```
 
-**Terminal 2 — React client:**
+**2. Start the frontend** (in a new terminal)
 ```bash
 cd client
 npm install
-npm run dev              # http://localhost:5173, proxies /api to :5000
+npm run dev
 ```
 
-Open `http://localhost:5173`, batch `DEMO-BATCH-001` is prefilled — click
-**Run reconciliation**.
+Vite will print a local URL in your terminal — usually `http://localhost:5173`, but it may pick a different port automatically if 5173 is already busy on your machine. Open whatever URL it prints, then click **Run reconciliation** on the demo batch.
 
-You can also hit the API directly:
-```
-POST /api/reconcile/DEMO-BATCH-001
-GET  /api/matches/DEMO-BATCH-001?status=pending_review
-GET  /api/audit/DEMO-BATCH-001
-```
+## Using your own data instead of demo data
 
-## Deploying (Day 14 — do this last)
+There's an upload option on the dashboard where you can drop in two CSV files instead of using the seeded data:
 
-1. **Database**: create a free MongoDB Atlas cluster, whitelist `0.0.0.0/0`
-   for now (tighten later), copy the connection string
-2. **Server**: push to GitHub, deploy on Render or Railway as a Node web
-   service, set `MONGO_URI` and `PORT` env vars, run `npm run seed` once via
-   their shell/console to populate the demo batch
-3. **Client**: in `client/vite.config.js` remove the local proxy and instead
-   set the deployed API URL via an env var (`VITE_API_BASE`), update
-   `src/services/api.js` to use `import.meta.env.VITE_API_BASE` as the base
-   instead of the relative `/api` path, then deploy `client/` on Vercel
-4. Add the live link + a screenshot or short screen recording to this README
-   before putting it on your resume — recruiters click through more often
-   than you'd expect
+- Ledger A (your side): `txnId, amount, date, refId, description`
+- Ledger B (bank side): `statementId, amount, date, refId, narration`
 
-## What I intentionally scoped out (and why)
-- **Real bank API integration** — synthetic seeded data is standard for a resume
-  project; the algorithm and controls are the point, not the data source.
-- **ML-based fuzzy matching** — rule-based scoring keeps the 2-week timeline
-  realistic; noted as future work rather than faked.
-- **Multi-currency** — single currency for MVP, called out as a known limitation.
+There are example CSVs in the `sample-data/` folder if you want to see the format first.
+
+## Status
+
+- [x] Matching engine with all 4 match types
+- [x] Manual review + approve/reject with required reason
+- [x] Full audit log
+- [x] Re-running is safe, no duplicates
+- [x] React dashboard
+- [x] CSV upload as an alternative to demo data
+
+## What I left out on purpose
+
+- No real bank API — the project uses sample and uploaded CSV data, since I don't have access to real bank systems as a student
+- No machine learning for the fuzzy matching — I used simple rules (amount + date range) instead, which is realistic for the time I had and still demonstrates the concept
+- Only one currency for now
+
+## Future goals
+
+- Add support for multiple currencies with proper FX handling
+- Replace the rule-based fuzzy matching with a smarter, possibly ML-based approach
+- Move from manually clicking "Run reconciliation" to automatic, real-time reconciliation using webhooks
+- Add a small test suite (Jest/Supertest) to cover the matching logic and API routes
+- Add proper user login so multiple reviewers can be tracked by account instead of typing a name manually
+
+## License
+# LedgerMatch — A Bank Ledger Reconciliation Engine
+
+A full-stack MERN project that automatically checks if two sets of transaction records match — like comparing your own order records with your bank statement — and flags anything that doesn't add up.
+
+## Why I built this
+
+I wanted to build something closer to what a real fintech or banking team actually works on.
+
+Here's the problem: every bank and payment company keeps two records of the same transaction. Your app might say "order refunded," but the bank statement should show that money actually coming back. In practice, these two records rarely match up perfectly. Timing can be different, a fee might get deducted along the way, or one side simply never records the transaction at all. Someone, or something, has to go through and match these records up, and flag the ones that don't look right.
+
+RBI actually has a rule about this. Banks are required to reverse a failed transaction within a set number of days — T+1 for UPI/IMPS, and 5 days for ATM transactions — or pay the customer ₹100 per day as a penalty. That rule exists because this exact reconciliation gap is such a common, real problem in the industry. This project is a smaller version of the kind of system that would catch that gap early, before it turns into a customer complaint or a compliance issue.
+
+![LedgerMatch dashboard](./screenshots/dashboard.png)
+
+## Features
+
+- **Two-sided ledger matching** — upload or load two sets of transactions (your internal records and the bank's records) and let the engine compare them
+- **Four-tier matching logic**
+  1. **Exact match** — same amount, same date, same reference ID
+  2. **Fuzzy match** — same amount, but the date is off by a day or two (common when settlement gets delayed)
+  3. **Split match** — one bank transaction that's actually the sum of two smaller internal transactions (happens with batched payouts)
+  4. **Amount mismatch** — same transaction, but the amount is slightly different, usually because a fee was deducted
+- **Exception queue** — anything the system can't confidently match gets flagged for manual review instead of being silently ignored
+- **Maker-checker review** — approving or rejecting a flagged transaction requires typing a reason first. This is a real control banks use so no one can quietly change a record without explaining why
+- **Permanent audit trail** — every match and every manual decision gets logged and nothing is ever deleted or overwritten, so the full history is always visible
+- **Safe re-runs** — running the matching process again on the same batch doesn't create duplicate entries
+- **CSV upload** — bring your own transaction data instead of relying only on demo data, with basic validation for missing columns or bad values
+- **Sample/demo data included** — a seed script generates a realistic batch of transactions with built-in mismatches, so the project works out of the box even without real data
+
+![Exception queue and audit trail](./screenshots/exception-queue.png)
 
 ## Tech stack
-MongoDB, Express, React, Node — MERN, deployed on Vercel (client) + Render (server) + Atlas (DB).
+
+- **MongoDB** — stores both ledgers, the matches, and the audit log
+- **Express + Node** — backend API and the actual matching logic
+- **React (Vite)** — dashboard where you can see match results and review exceptions
+- **Multer + csv-parse** — handles CSV file uploads on the backend
+
+## Project structure
+
+```
+ledgermatch/
+├── client/                      # React frontend (Vite)
+│   └── src/
+│       ├── components/          # StatBar, LedgerTable, MatchDrawer, AuditTrail, etc.
+│       ├── services/api.js      # all API calls to the backend
+│       ├── utils/format.js      # date/amount formatting helpers
+│       └── App.jsx              # main app, ties everything together
+│
+├── server/                      # Express backend
+│   ├── models/                  # LedgerA, LedgerB, Match, AuditLog (Mongoose schemas)
+│   ├── routes/                  # reconciliation.js, upload.js
+│   ├── services/
+│   │   └── matchingEngine.js    # the core matching logic — this is the main file
+│   ├── scripts/seed.js          # generates sample transaction data
+│   └── index.js                 # server entry point
+│
+└── sample-data/                 # example CSVs for the upload feature
+```
+
+## How to run it
+
+You need MongoDB running somewhere (either install it locally, or make a free account on MongoDB Atlas — that's what I used).
+
+**1. Start the backend**
+```bash
+cd server
+cp .env.example .env
+# open .env and put your own MongoDB connection string in there
+npm install
+npm run seed      # generates sample transaction data so you can try it right away
+npm run dev
+```
+
+**2. Start the frontend** (in a new terminal)
+```bash
+cd client
+npm install
+npm run dev
+```
+
+Vite will print a local URL in your terminal — usually `http://localhost:5173`, but it may pick a different port automatically if 5173 is already busy on your machine. Open whatever URL it prints, then click **Run reconciliation** on the demo batch.
+
+## Using your own data instead of demo data
+
+There's an upload option on the dashboard where you can drop in two CSV files instead of using the seeded data:
+
+- Ledger A (your side): `txnId, amount, date, refId, description`
+- Ledger B (bank side): `statementId, amount, date, refId, narration`
+
+There are example CSVs in the `sample-data/` folder if you want to see the format first.
+
+## Status
+
+- [x] Matching engine with all 4 match types
+- [x] Manual review + approve/reject with required reason
+- [x] Full audit log
+- [x] Re-running is safe, no duplicates
+- [x] React dashboard
+- [x] CSV upload as an alternative to demo data
+
+## What I left out on purpose
+
+- No real bank API — the project uses sample and uploaded CSV data, since I don't have access to real bank systems as a student
+- No machine learning for the fuzzy matching — I used simple rules (amount + date range) instead, which is realistic for the time I had and still demonstrates the concept
+- Only one currency for now
+
+## Future goals
+
+- Add support for multiple currencies with proper FX handling
+- Replace the rule-based fuzzy matching with a smarter, possibly ML-based approach
+- Move from manually clicking "Run reconciliation" to automatic, real-time reconciliation using webhooks
+- Add a small test suite (Jest/Supertest) to cover the matching logic and API routes
+- Add proper user login so multiple reviewers can be tracked by account instead of typing a name manually
+
+## License
+
+MIT
+
+---
+ 
+Built as a portfolio project to show I understand more than just CRUD — things like data consistency, audit trails, and controls that actually matter in fintech systems.
+MIT
+
+---
+
+Built as a portfolio project to show I understand more than just CRUD — things like data consistency, audit trails, and controls that actually matter in fintech systems.

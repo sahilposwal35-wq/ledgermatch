@@ -8,6 +8,7 @@ import UploadPanel from './components/UploadPanel';
 import { runReconciliation, getMatches, getAuditTrail } from './services/api';
 
 const DEFAULT_BATCH = 'DEMO-BATCH-001';
+const LAST_BATCH_KEY = 'ledgermatch:lastBatchId';
 const FILTERS = [
   { key: 'all', label: 'All' },
   { key: 'pending_review', label: 'Pending review' },
@@ -16,7 +17,15 @@ const FILTERS = [
 ];
 
 export default function App() {
-  const [batchId, setBatchId] = useState(DEFAULT_BATCH);
+  // Restore whatever batch the user last worked with, so a page refresh doesn't
+  // silently snap back to the seeded demo batch and make uploaded data look "lost"
+  const [batchId, setBatchId] = useState(() => {
+    try {
+      return localStorage.getItem(LAST_BATCH_KEY) || DEFAULT_BATCH;
+    } catch {
+      return DEFAULT_BATCH; // localStorage can throw in some private-browsing modes
+    }
+  });
   const [summary, setSummary] = useState(null);
   const [matches, setMatches] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
@@ -56,6 +65,11 @@ export default function App() {
   useEffect(() => {
     loadMatches(filter);
     loadAudit();
+    try {
+      localStorage.setItem(LAST_BATCH_KEY, batchId);
+    } catch {
+      // ignore — persistence is a nice-to-have, not required for the app to work
+    }
   }, [batchId]);
 
   useEffect(() => {

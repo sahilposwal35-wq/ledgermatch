@@ -1,4 +1,9 @@
-const BASE = '/api';
+// In local dev, Vite's proxy forwards relative /api requests to localhost:5000.
+// That proxy does NOT exist in a production build — once deployed, the frontend
+// and backend usually live on different domains (e.g. Vercel + Render), so we
+// need an explicit backend URL. Set VITE_API_BASE_URL in the client's deploy
+// environment to your backend's full URL, e.g. https://ledgermatch-api.onrender.com/api
+const BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
 async function handle(res) {
   if (!res.ok) {
