@@ -28,7 +28,11 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/ledgermatch')
+// family: 4 forces IPv4 for this connection. Some hosting providers (Render included)
+// route outbound connections over IPv6 by default, and Atlas's TLS termination can
+// fail the handshake over IPv6 with an opaque "tlsv1 alert internal error" — forcing
+// IPv4 sidesteps that entirely.
+mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/ledgermatch', { family: 4 })
   .then(() => {
     console.log('MongoDB connected');
     app.listen(PORT, () => console.log(`LedgerMatch API running on port ${PORT}`));
