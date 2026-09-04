@@ -116,6 +116,7 @@ export default function App() {
     if (!activeBatchName) return;
     setRunning(true);
     setError(null);
+    setCurrentView('dashboard'); // Auto-switch to dashboard to see results
     try {
       await runReconciliation(activeBatchName);
       // Refresh the current batch data which now contains the persisted summary
