@@ -4,12 +4,14 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const reconciliationRoutes = require('./routes/reconciliation');
 const uploadRoutes = require('./routes/upload');
+const batchesRoutes = require('./routes/batches');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use('/api', reconciliationRoutes);
 app.use('/api', uploadRoutes);
+app.use('/api', batchesRoutes);
 
 app.get('/health', (req, res) => {
   const dbState = mongoose.connection.readyState; // 1 = connected

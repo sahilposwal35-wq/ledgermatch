@@ -5,9 +5,9 @@ import MatchDrawer from './components/MatchDrawer';
 import AuditTrail from './components/AuditTrail';
 import BreakdownChart from './components/BreakdownChart';
 import UploadPanel from './components/UploadPanel';
-import { runReconciliation, getMatches, getAuditTrail } from './services/api';
+import SettingsView from './components/SettingsView';
+import { runReconciliation, getMatches, getAuditTrail, getBatches, createBatch, getBatch } from './services/api';
 
-const DEFAULT_BATCH = 'DEMO-BATCH-001';
 const LAST_BATCH_KEY = 'ledgermatch:lastBatchId';
 const FILTERS = [
   { key: 'all', label: 'All' },
@@ -17,16 +17,14 @@ const FILTERS = [
 ];
 
 export default function App() {
-  // Restore whatever batch the user last worked with, so a page refresh doesn't
-  // silently snap back to the seeded demo batch and make uploaded data look "lost"
-  const [batchId, setBatchId] = useState(() => {
-    try {
-      return localStorage.getItem(LAST_BATCH_KEY) || DEFAULT_BATCH;
-    } catch {
-      return DEFAULT_BATCH; // localStorage can throw in some private-browsing modes
-    }
-  });
-  const [summary, setSummary] = useState(null);
+  const [currentView, setCurrentView] = useState('dashboard');
+  const [batches, setBatches] = useState([]);
+  const [activeBatchName, setActiveBatchName] = useState(() => localStorage.getItem(LAST_BATCH_KEY) || '');
+  const [activeBatch, setActiveBatch] = useState(null);
+  
+  const [newBatchName, setNewBatchName] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
+
   const [matches, setMatches] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
   const [filter, setFilter] = useState('all');
@@ -37,53 +35,92 @@ export default function App() {
   const [error, setError] = useState(null);
   const [toast, setToast] = useState(null);
 
-  const loadMatches = useCallback(async (currentFilter) => {
-    setLoadingMatches(true);
+  const loadBatches = useCallback(async () => {
     try {
-      const status = currentFilter === 'all' ? undefined : currentFilter;
-      const data = await getMatches(batchId, { status });
-      setMatches(data);
+      const data = await getBatches();
+      setBatches(data);
     } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoadingMatches(false);
+      console.error(e);
     }
-  }, [batchId]);
+  }, []);
 
-  const loadAudit = useCallback(async () => {
-    setLoadingAudit(true);
-    try {
-      const data = await getAuditTrail(batchId);
-      setAuditLogs(data);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoadingAudit(false);
+  const loadBatchData = useCallback(async (batchName, currentFilter) => {
+    if (!batchName) {
+      setActiveBatch(null);
+      setMatches([]);
+      setAuditLogs([]);
+      return;
     }
-  }, [batchId]);
-
-  useEffect(() => {
-    loadMatches(filter);
-    loadAudit();
-    try {
-      localStorage.setItem(LAST_BATCH_KEY, batchId);
-    } catch {
-      // ignore — persistence is a nice-to-have, not required for the app to work
-    }
-  }, [batchId]);
-
-  useEffect(() => {
-    loadMatches(filter);
-  }, [filter]);
-
-  async function handleRun() {
-    setRunning(true);
+    
     setError(null);
     try {
-      const { summary } = await runReconciliation(batchId);
-      setSummary(summary);
-      await loadMatches(filter);
-      await loadAudit();
+      const batchData = await getBatch(batchName);
+      setActiveBatch(batchData);
+      
+      setLoadingMatches(true);
+      setLoadingAudit(true);
+      
+      const status = currentFilter === 'all' ? undefined : currentFilter;
+      const [matchesResponse, auditData] = await Promise.all([
+        getMatches(batchName, { status }),
+        getAuditTrail(batchName)
+      ]);
+      
+      setMatches(matchesResponse.matches || []);
+      setAuditLogs(auditData);
+      
+    } catch (e) {
+      setError(e.message);
+      setActiveBatch(null);
+      if (e.message.toLowerCase().includes('not found')) {
+        setActiveBatchName('');
+        localStorage.removeItem(LAST_BATCH_KEY);
+      }
+    } finally {
+      setLoadingMatches(false);
+      setLoadingAudit(false);
+    }
+  }, []);
+
+  // Initial load
+  useEffect(() => {
+    loadBatches();
+  }, [loadBatches]);
+
+  // When active batch name or filter changes
+  useEffect(() => {
+    if (activeBatchName) {
+      localStorage.setItem(LAST_BATCH_KEY, activeBatchName);
+    }
+    loadBatchData(activeBatchName, filter);
+  }, [activeBatchName, filter, loadBatchData]);
+
+  async function handleCreateBatch(e) {
+    e.preventDefault();
+    if (!newBatchName.trim()) return;
+    setIsCreating(true);
+    setError(null);
+    try {
+      const batch = await createBatch(newBatchName);
+      await loadBatches();
+      setActiveBatchName(batch.name);
+      setNewBatchName('');
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setIsCreating(false);
+    }
+  }
+
+  async function handleRun() {
+    if (!activeBatchName) return;
+    setRunning(true);
+    setError(null);
+    setCurrentView('dashboard'); // Auto-switch to dashboard to see results
+    try {
+      await runReconciliation(activeBatchName);
+      // Refresh the current batch data which now contains the persisted summary
+      await loadBatchData(activeBatchName, filter);
       setToast('Reconciliation run complete');
       setTimeout(() => setToast(null), 2500);
     } catch (e) {
@@ -96,69 +133,136 @@ export default function App() {
   function handleResolved(updated) {
     setMatches(prev => prev.map(m => (m._id === updated._id ? { ...m, ...updated } : m)));
     setSelected(updated);
-    loadAudit();
+    // Reload audit logs to show the new manual override entry
+    getAuditTrail(activeBatchName).then(setAuditLogs);
     setToast('Decision recorded to audit trail');
     setTimeout(() => setToast(null), 2500);
   }
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="brand">
+    <div className="app-container">
+      <div className="sidebar">
+        <div className="sidebar-header">
           <div className="brand-mark">Ledger<span>Match</span></div>
-          <div className="brand-sub">reconciliation worksheet</div>
         </div>
-        <div className="topbar-controls">
-          <div className="batch-field">
-            <label htmlFor="batchId">Batch no.</label>
-            <input
-              id="batchId"
-              className="batch-select"
-              value={batchId}
-              onChange={e => setBatchId(e.target.value)}
-              spellCheck={false}
-            />
+        <div className="sidebar-nav">
+          <div 
+            className={`nav-item ${currentView === 'dashboard' ? 'active' : ''}`}
+            onClick={() => setCurrentView('dashboard')}
+          >
+            Dashboard
           </div>
-          <button className="btn-run" onClick={handleRun} disabled={running}>
-            {running ? 'Running…' : 'Run reconciliation'}
-          </button>
+          <div 
+            className={`nav-item ${currentView === 'settings' ? 'active' : ''}`}
+            onClick={() => setCurrentView('settings')}
+          >
+            Settings
+          </div>
         </div>
-      </header>
+      </div>
 
-      <UploadPanel batchId={batchId} onUploaded={() => { loadMatches(filter); loadAudit(); }} />
-
-      {error && <div className="error-banner">{error}</div>}
-
-      <StatBar summary={summary} />
-
-      <div className="main-layout">
-        <div className="queue-panel">
-          {summary?.breakdown && <BreakdownChart breakdown={summary.breakdown} />}
-
-          <div className="panel-header">
-            <div className="panel-title">Exception queue</div>
-            <div className="filter-tabs">
-              {FILTERS.map(f => (
-                <button
-                  key={f.key}
-                  className={`filter-tab ${filter === f.key ? 'active' : ''}`}
-                  onClick={() => setFilter(f.key)}
-                >
-                  {f.label}
-                </button>
-              ))}
+      <div className="main-content">
+        <div className="page-header">
+          <div className="page-title">
+            {currentView === 'dashboard' ? 'Reconciliation Overview' : 'Settings'}
+          </div>
+          <div className="header-actions">
+            <div className="batch-field">
+              <label htmlFor="batchSelect">Active Batch</label>
+              <select 
+                id="batchSelect" 
+                className="batch-select"
+                value={activeBatchName}
+                onChange={e => setActiveBatchName(e.target.value)}
+              >
+                <option value="">-- Select a Batch --</option>
+                {batches.map(b => (
+                  <option key={b._id} value={b.name}>{b.name}</option>
+                ))}
+              </select>
             </div>
+            <button 
+              className="btn-primary" 
+              onClick={handleRun} 
+              disabled={running || !activeBatch || activeBatch.status === 'created'}
+            >
+              {running ? 'Running…' : 'Run Reconciliation'}
+            </button>
           </div>
-
-          <LedgerTable
-            matches={matches}
-            selectedId={selected?._id}
-            onSelect={setSelected}
-            loading={loadingMatches}
-          />
         </div>
 
-        <AuditTrail logs={auditLogs} loading={loadingAudit} />
+        <div className="page-body">
+          {error && <div className="error-banner">{error}</div>}
+
+          {currentView === 'settings' ? (
+            <SettingsView batch={activeBatch} onUpdate={setActiveBatch} />
+          ) : (
+            !activeBatchName || !activeBatch ? (
+              <div className="empty-state">
+                <div className="empty-state-title">No Batch Selected</div>
+                <div style={{ marginBottom: 24 }}>Create a new batch or select an existing one to begin.</div>
+                <form onSubmit={handleCreateBatch} style={{ display: 'inline-flex', gap: 8 }}>
+                  <input 
+                    className="batch-select" 
+                    placeholder="e.g. AUG-RECON-01" 
+                    value={newBatchName}
+                    onChange={e => setNewBatchName(e.target.value)}
+                    style={{ background: '#fff' }}
+                  />
+                  <button type="submit" className="btn-secondary" disabled={isCreating}>
+                    {isCreating ? 'Creating...' : 'Create Batch'}
+                  </button>
+                </form>
+              </div>
+            ) : (
+              <>
+                <UploadPanel 
+                  batch={activeBatch} 
+                  onUploaded={() => loadBatchData(activeBatchName, filter)} 
+                />
+
+                {activeBatch?.summary && (
+                  <StatBar summary={activeBatch.summary} />
+                )}
+
+                {activeBatch?.status === 'reconciled' && (
+                  <div className="dashboard-layout">
+                    <div className="table-panel">
+                      <div className="panel-header">
+                        <div className="panel-title">Exception Queue</div>
+                        <div className="filter-tabs">
+                          {FILTERS.map(f => (
+                            <button
+                              key={f.key}
+                              className={`filter-tab ${filter === f.key ? 'active' : ''}`}
+                              onClick={() => setFilter(f.key)}
+                            >
+                              {f.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      
+                      <LedgerTable
+                        matches={matches}
+                        selectedId={selected?._id}
+                        onSelect={setSelected}
+                        loading={loadingMatches}
+                      />
+                    </div>
+
+                    <div className="sidebar-right">
+                      {activeBatch?.summary?.breakdown && (
+                        <BreakdownChart breakdown={activeBatch.summary.breakdown} />
+                      )}
+                      <AuditTrail logs={auditLogs} loading={loadingAudit} />
+                    </div>
+                  </div>
+                )}
+              </>
+            )
+          )}
+        </div>
       </div>
 
       {selected && (

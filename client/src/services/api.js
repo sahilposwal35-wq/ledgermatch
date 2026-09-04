@@ -1,16 +1,47 @@
-// In local dev, Vite's proxy forwards relative /api requests to localhost:5000.
-// That proxy does NOT exist in a production build — once deployed, the frontend
-// and backend usually live on different domains (e.g. Vercel + Render), so we
-// need an explicit backend URL. Set VITE_API_BASE_URL in the client's deploy
-// environment to your backend's full URL, e.g. https://ledgermatch-api.onrender.com/api
 const BASE = import.meta.env.VITE_API_BASE_URL || '/api';
+
+export class ApiError extends Error {
+  constructor(message, status, data) {
+    super(message);
+    this.status = status;
+    this.data = data;
+  }
+}
 
 async function handle(res) {
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `Request failed: ${res.status}`);
+    throw new ApiError(body.error || `Request failed: ${res.status}`, res.status, body);
   }
   return res.json();
+}
+
+export async function getBatches() {
+  const res = await fetch(`${BASE}/batches`);
+  return handle(res);
+}
+
+export async function createBatch(name) {
+  const res = await fetch(`${BASE}/batches`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name })
+  });
+  return handle(res);
+}
+
+export async function getBatch(name) {
+  const res = await fetch(`${BASE}/batches/${name}`);
+  return handle(res);
+}
+
+export async function updateRules(batchId, rules) {
+  const res = await fetch(`${BASE}/batches/${batchId}/rules`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(rules)
+  });
+  return handle(res);
 }
 
 export async function runReconciliation(batchId) {
@@ -18,12 +49,13 @@ export async function runReconciliation(batchId) {
   return handle(res);
 }
 
-export async function getMatches(batchId, { status, matchType } = {}) {
-  const params = new URLSearchParams();
-  if (status) params.set('status', status);
-  if (matchType) params.set('matchType', matchType);
-  const qs = params.toString() ? `?${params.toString()}` : '';
-  const res = await fetch(`${BASE}/matches/${batchId}${qs}`);
+export async function getMatches(batchId, { status, page = 1, limit = 50 } = {}) {
+  const qs = new URLSearchParams();
+  if (status) qs.append('status', status);
+  qs.append('page', page);
+  qs.append('limit', limit);
+  
+  const res = await fetch(`${BASE}/matches/${batchId}?${qs.toString()}`);
   return handle(res);
 }
 
@@ -41,10 +73,13 @@ export async function getAuditTrail(batchId) {
   return handle(res);
 }
 
-export async function uploadCsvs(batchId, ledgerAFile, ledgerBFile) {
-  const formData = new FormData();
-  formData.append('ledgerA', ledgerAFile);
-  formData.append('ledgerB', ledgerBFile);
-  const res = await fetch(`${BASE}/upload/${batchId}`, { method: 'POST', body: formData });
+export async function uploadCsvs(batchId, fileA, fileB, mappingA, mappingB, force = false) {
+  const fd = new FormData();
+  fd.append('ledgerA', fileA);
+  fd.append('ledgerB', fileB);
+  fd.append('mappingA', JSON.stringify(mappingA));
+  fd.append('mappingB', JSON.stringify(mappingB));
+  const url = `${BASE}/upload/${batchId}${force ? '?force=true' : ''}`;
+  const res = await fetch(url, { method: 'POST', body: fd });
   return handle(res);
 }

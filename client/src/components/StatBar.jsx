@@ -3,24 +3,24 @@ export default function StatBar({ summary }) {
   const breakdown = summary?.breakdown || {};
 
   const cells = [
-    { label: 'Exact', value: breakdown.exact || 0 },
-    { label: 'Fuzzy', value: breakdown.fuzzy || 0 },
-    { label: 'Split', value: breakdown.split || 0 },
+    { label: 'Exact Matches', value: breakdown.exact || 0 },
+    { label: 'Fuzzy Matches', value: breakdown.fuzzy || 0 },
+    { label: 'Split Matches', value: breakdown.split || 0 },
     { label: 'Exceptions', value: (breakdown.amount_mismatch || 0) + (breakdown.unmatched_a || 0) + (breakdown.unmatched_b || 0) }
   ];
 
   return (
-    <div className="stat-bar">
-      <div className="stat-hero">
-        <div className="stat-hero-label">Reconciliation rate</div>
-        <div className={`stat-hero-value ${rate === undefined ? 'empty' : ''}`}>
+    <div className="metrics-grid">
+      <div className="metric-card">
+        <div className="metric-label">Reconciliation Rate</div>
+        <div className={`metric-value ${rate !== undefined ? 'highlight' : ''}`}>
           {rate !== undefined ? `${rate}%` : '—'}
         </div>
       </div>
       {cells.map(c => (
-        <div className="stat-cell" key={c.label}>
-          <div className="stat-cell-label">{c.label}</div>
-          <div className="stat-cell-value">{c.value}</div>
+        <div className="metric-card" key={c.label}>
+          <div className="metric-label">{c.label}</div>
+          <div className="metric-value">{c.value}</div>
         </div>
       ))}
     </div>
