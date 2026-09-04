@@ -8,6 +8,9 @@ const router = express.Router();
 const LedgerA = require('../models/LedgerA');
 const LedgerB = require('../models/LedgerB');
 const Batch = require('../models/Batch');
+const auth = require('../middleware/auth');
+
+router.use(auth);
 
 const uploadDir = path.join(__dirname, '../uploads');
 if (!fs.existsSync(uploadDir)) {
@@ -98,7 +101,7 @@ router.post('/upload/:batchId', upload.fields([{ name: 'ledgerA', maxCount: 1 },
   let ledgerBPath = null;
   
   try {
-    const batch = await Batch.findOne({ name: batchId });
+    const batch = await Batch.findOne({ name: batchId, userId: req.user.id });
     if (!batch) {
       return res.status(404).json({ error: 'Batch not found. Please create or select a batch first.' });
     }

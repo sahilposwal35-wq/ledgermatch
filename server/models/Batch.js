@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 
 const batchSchema = new mongoose.Schema({
   name: { type: String, required: true, unique: true, index: true },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   ledgerAFileName: { type: String },
   ledgerBFileName: { type: String },
   ledgerACount: { type: Number, default: 0 },
