@@ -2,128 +2,129 @@ const LedgerA = require('../models/LedgerA');
 const LedgerB = require('../models/LedgerB');
 const Match = require('../models/Match');
 const AuditLog = require('../models/AuditLog');
-
-const DATE_TOLERANCE_DAYS = 2;
-const AMOUNT_TOLERANCE = 0.01; // ~1 paisa/cent rounding tolerance
+const Batch = require('../models/Batch');
 
 function daysBetween(d1, d2) {
   return Math.abs((new Date(d1) - new Date(d2)) / (1000 * 60 * 60 * 24));
 }
 
-async function writeAudit(batchId, matchId, action, actor, reason, snapshot) {
-  await AuditLog.create({ batchId, matchId, action, actor, reason, snapshot });
-}
-
 /**
  * Runs full reconciliation for a batch.
- * Idempotent: if matches already exist for this batchId, it clears and reruns cleanly
- * rather than duplicating (safe re-run guarantee).
  */
 async function runReconciliation(batchId) {
-  await AuditLog.create({ batchId, action: 'RECON_RUN_START', actor: 'system' });
+  const batch = await Batch.findOne({ name: batchId });
+  const DATE_TOLERANCE_DAYS = batch?.rules?.dateToleranceDays ?? 2;
+  const AMOUNT_TOLERANCE = batch?.rules?.amountTolerance ?? 0.01;
 
-  // Idempotency guard: wipe prior matches for this batch before rerunning
+  await AuditLog.create({ batchId, action: 'RECON_RUN_START', actor: 'system' });
   await Match.deleteMany({ batchId });
 
-  const aTxns = await LedgerA.find({ batchId });
-  const bTxns = await LedgerB.find({ batchId });
+  // Use .lean() to drastically reduce memory usage
+  const aTxns = await LedgerA.find({ batchId }).lean();
+  const bTxns = await LedgerB.find({ batchId }).lean();
 
   const usedA = new Set();
   const usedB = new Set();
   const matches = [];
 
-  // --- Tier 1: Exact match (refId + amount + same date) ---
+  // Group B for fast O(1) lookups
+  const bByRef = new Map();
+  const bByAmount = new Map();
+
+  for (const b of bTxns) {
+    if (b.refId) {
+      if (!bByRef.has(b.refId)) bByRef.set(b.refId, []);
+      bByRef.get(b.refId).push(b);
+    }
+    const amtKey = b.amount.toFixed(2);
+    if (!bByAmount.has(amtKey)) bByAmount.set(amtKey, []);
+    bByAmount.get(amtKey).push(b);
+  }
+
+  // --- Tier 1: Exact match ---
   for (const a of aTxns) {
     if (usedA.has(String(a._id))) continue;
-    const exactB = bTxns.find(b =>
-      !usedB.has(String(b._id)) &&
-      b.refId === a.refId &&
-      Math.abs(b.amount - a.amount) < AMOUNT_TOLERANCE &&
+    const candidates = bByRef.get(a.refId) || [];
+    const exactB = candidates.find(b => 
+      !usedB.has(String(b._id)) && 
+      Math.abs(b.amount - a.amount) < AMOUNT_TOLERANCE && 
       daysBetween(a.date, b.date) === 0
     );
     if (exactB) {
-      usedA.add(String(a._id));
-      usedB.add(String(exactB._id));
+      usedA.add(String(a._id)); usedB.add(String(exactB._id));
       matches.push({
         batchId, ledgerAIds: [a._id], ledgerBIds: [exactB._id],
-        matchType: 'exact', confidence: 100, status: 'auto_matched',
-        reasonCode: 'EXACT_MATCH'
+        matchType: 'exact', confidence: 100, status: 'auto_matched', reasonCode: 'EXACT_MATCH'
       });
     }
   }
 
-  // --- Tier 2: Fuzzy match (amount close, date within tolerance, refId may differ) ---
+  // --- Tier 2: Fuzzy match ---
   for (const a of aTxns) {
     if (usedA.has(String(a._id))) continue;
-    const fuzzyB = bTxns.find(b =>
-      !usedB.has(String(b._id)) &&
-      Math.abs(b.amount - a.amount) < AMOUNT_TOLERANCE &&
+    const amtKey = a.amount.toFixed(2);
+    const candidates = bByAmount.get(amtKey) || [];
+    const fuzzyB = candidates.find(b => 
+      !usedB.has(String(b._id)) && 
       daysBetween(a.date, b.date) <= DATE_TOLERANCE_DAYS
     );
     if (fuzzyB) {
-      usedA.add(String(a._id));
-      usedB.add(String(fuzzyB._id));
+      usedA.add(String(a._id)); usedB.add(String(fuzzyB._id));
       const dayDiff = daysBetween(a.date, fuzzyB.date);
       matches.push({
         batchId, ledgerAIds: [a._id], ledgerBIds: [fuzzyB._id],
         matchType: 'fuzzy', confidence: dayDiff === 0 ? 90 : 75,
-        status: dayDiff === 0 ? 'auto_matched' : 'pending_review',
-        reasonCode: 'TIMING_DIFF'
+        status: dayDiff === 0 ? 'auto_matched' : 'pending_review', reasonCode: 'TIMING_DIFF'
       });
     }
   }
 
-  // --- Tier 3: Split match (2 A txns summing to 1 B txn, or vice versa) — capped 2:1 ---
+  // --- Tier 3: Split match (O(A^2) instead of O(A^2 * B)) ---
   const remainingA = aTxns.filter(a => !usedA.has(String(a._id)));
-  const remainingB = bTxns.filter(b => !usedB.has(String(b._id)));
-
-  for (const b of remainingB) {
-    if (usedB.has(String(b._id))) continue;
-    for (let i = 0; i < remainingA.length; i++) {
-      for (let j = i + 1; j < remainingA.length; j++) {
-        const a1 = remainingA[i], a2 = remainingA[j];
-        if (usedA.has(String(a1._id)) || usedA.has(String(a2._id))) continue;
-        if (Math.abs((a1.amount + a2.amount) - b.amount) < AMOUNT_TOLERANCE &&
-            daysBetween(a1.date, b.date) <= DATE_TOLERANCE_DAYS) {
-          usedA.add(String(a1._id)); usedA.add(String(a2._id));
-          usedB.add(String(b._id));
-          matches.push({
-            batchId, ledgerAIds: [a1._id, a2._id], ledgerBIds: [b._id],
-            matchType: 'split', confidence: 70, status: 'pending_review',
-            reasonCode: 'BATCHED_SETTLEMENT'
-          });
-        }
+  for (let i = 0; i < remainingA.length; i++) {
+    for (let j = i + 1; j < remainingA.length; j++) {
+      const a1 = remainingA[i], a2 = remainingA[j];
+      if (usedA.has(String(a1._id)) || usedA.has(String(a2._id))) continue;
+      
+      const sum = (a1.amount + a2.amount).toFixed(2);
+      const candidates = bByAmount.get(sum) || [];
+      const splitB = candidates.find(b => 
+        !usedB.has(String(b._id)) && daysBetween(a1.date, b.date) <= DATE_TOLERANCE_DAYS
+      );
+      
+      if (splitB) {
+        usedA.add(String(a1._id)); usedA.add(String(a2._id)); usedB.add(String(splitB._id));
+        matches.push({
+          batchId, ledgerAIds: [a1._id, a2._id], ledgerBIds: [splitB._id],
+          matchType: 'split', confidence: 70, status: 'pending_review', reasonCode: 'BATCHED_SETTLEMENT'
+        });
       }
     }
   }
 
-  // --- Tier 4: Amount mismatch (same refId + close date, but amount differs beyond tolerance) ---
+  // --- Tier 4: Amount mismatch ---
   for (const a of aTxns) {
     if (usedA.has(String(a._id))) continue;
-    const b = bTxns.find(b =>
-      !usedB.has(String(b._id)) &&
-      b.refId === a.refId &&
-      daysBetween(a.date, b.date) <= DATE_TOLERANCE_DAYS
+    const candidates = bByRef.get(a.refId) || [];
+    const b = candidates.find(b => 
+      !usedB.has(String(b._id)) && daysBetween(a.date, b.date) <= DATE_TOLERANCE_DAYS
     );
     if (b) {
-      usedA.add(String(a._id));
-      usedB.add(String(b._id));
+      usedA.add(String(a._id)); usedB.add(String(b._id));
       matches.push({
         batchId, ledgerAIds: [a._id], ledgerBIds: [b._id],
         matchType: 'amount_mismatch', confidence: 40, status: 'pending_review',
-        amountDelta: +(a.amount - b.amount).toFixed(2),
-        reasonCode: 'AMOUNT_DISCREPANCY'
+        amountDelta: +(a.amount - b.amount).toFixed(2), reasonCode: 'AMOUNT_DISCREPANCY'
       });
     }
   }
 
-  // --- Remaining unmatched ---
+  // --- Remaining ---
   for (const a of aTxns) {
     if (!usedA.has(String(a._id))) {
       matches.push({
         batchId, ledgerAIds: [a._id], ledgerBIds: [],
-        matchType: 'unmatched_a', confidence: 0, status: 'pending_review',
-        reasonCode: 'MISSING_ON_LEDGER_B'
+        matchType: 'unmatched_a', confidence: 0, status: 'pending_review', reasonCode: 'MISSING_ON_LEDGER_B'
       });
     }
   }
@@ -131,22 +132,31 @@ async function runReconciliation(batchId) {
     if (!usedB.has(String(b._id))) {
       matches.push({
         batchId, ledgerAIds: [], ledgerBIds: [b._id],
-        matchType: 'unmatched_b', confidence: 0, status: 'pending_review',
-        reasonCode: 'MISSING_ON_LEDGER_A'
+        matchType: 'unmatched_b', confidence: 0, status: 'pending_review', reasonCode: 'MISSING_ON_LEDGER_A'
       });
     }
   }
 
-  const created = await Match.insertMany(matches);
-
-  for (const m of created) {
-    await writeAudit(batchId, m._id, 'AUTO_MATCH', 'system', null, { matchType: m.matchType, confidence: m.confidence });
+  // Bulk Insert Matches (Chunked to save memory)
+  const chunkSize = 2000;
+  const created = [];
+  for (let i = 0; i < matches.length; i += chunkSize) {
+    created.push(...(await Match.insertMany(matches.slice(i, i + chunkSize))));
   }
 
-  await AuditLog.create({
+  // Bulk Insert Audit Logs
+  const auditLogs = created.map(m => ({
+    batchId, matchId: m._id, action: 'AUTO_MATCH', actor: 'system', 
+    snapshot: { matchType: m.matchType, confidence: m.confidence }
+  }));
+  auditLogs.push({
     batchId, action: 'RECON_RUN_COMPLETE', actor: 'system',
     snapshot: { totalMatches: created.length, totalA: aTxns.length, totalB: bTxns.length }
   });
+  
+  for (let i = 0; i < auditLogs.length; i += chunkSize) {
+    await AuditLog.insertMany(auditLogs.slice(i, i + chunkSize));
+  }
 
   return summarize(created, aTxns.length, bTxns.length);
 }

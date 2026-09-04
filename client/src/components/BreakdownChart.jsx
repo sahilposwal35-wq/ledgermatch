@@ -1,13 +1,14 @@
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { MATCH_TYPE_LABEL } from '../utils/format';
 
+// semantic colors to match new css
 const COLOR = {
-  exact: '#3C6B49',
-  fuzzy: '#A9823D',
-  split: '#3C6B49',
-  amount_mismatch: '#9C3B2C',
-  unmatched_a: '#9C3B2C',
-  unmatched_b: '#9C3B2C'
+  exact: '#10B981', // status-success
+  split: '#10B981',
+  fuzzy: '#F59E0B', // status-warning
+  amount_mismatch: '#EF4444', // status-error
+  unmatched_a: '#EF4444',
+  unmatched_b: '#EF4444'
 };
 
 export default function BreakdownChart({ breakdown }) {
@@ -18,26 +19,26 @@ export default function BreakdownChart({ breakdown }) {
   if (data.length === 0) return null;
 
   return (
-    <div className="chart-section">
-      <div className="panel-title" style={{ marginBottom: 12 }}>Match breakdown</div>
-      <ResponsiveContainer width="100%" height={140}>
+    <div className="chart-card">
+      <div className="panel-title" style={{ marginBottom: 16 }}>Match Breakdown</div>
+      <ResponsiveContainer width="100%" height={160}>
         <BarChart data={data} layout="vertical" margin={{ left: 8, right: 20 }}>
           <XAxis type="number" hide />
           <YAxis
             type="category"
             dataKey="name"
-            width={90}
-            tick={{ fill: '#666F5C', fontSize: 11, fontFamily: 'IBM Plex Mono' }}
+            width={100}
+            tick={{ fill: '#6B7280', fontSize: 11, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}
             axisLine={false}
             tickLine={false}
           />
           <Tooltip
-            contentStyle={{ background: '#F9F6EC', border: '1px solid #B9AF8D', borderRadius: 2, fontSize: 12, fontFamily: 'IBM Plex Mono' }}
-            labelStyle={{ color: '#23291E' }}
-            cursor={{ fill: 'rgba(35,41,30,0.04)' }}
+            contentStyle={{ background: '#FFFFFF', border: '1px solid #E5E7EB', borderRadius: 6, fontSize: 12, boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}
+            labelStyle={{ color: '#111827', fontWeight: 600, marginBottom: 4 }}
+            cursor={{ fill: '#F9FAFB' }}
           />
-          <Bar dataKey="value" radius={[0, 0, 0, 0]} barSize={14}>
-            {data.map(d => <Cell key={d.key} fill={COLOR[d.key] || '#9BA08D'} />)}
+          <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={16}>
+            {data.map(d => <Cell key={d.key} fill={COLOR[d.key] || '#D1D5DB'} />)}
           </Bar>
         </BarChart>
       </ResponsiveContainer>

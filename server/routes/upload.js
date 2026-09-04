@@ -1,92 +1,168 @@
 const express = require('express');
 const multer = require('multer');
-const { parse } = require('csv-parse/sync');
+const { parse } = require('csv-parse');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 const router = express.Router();
 const LedgerA = require('../models/LedgerA');
 const LedgerB = require('../models/LedgerB');
+const Batch = require('../models/Batch');
 
-// Files are parsed in memory, never written to disk — no cleanup needed, nothing lingers
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+const uploadDir = path.join(__dirname, '../uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// Phase 1: Switch to disk storage for stream parsing
+const upload = multer({ dest: uploadDir, limits: { fileSize: 50 * 1024 * 1024 } }); // 50MB limit
 
 const LEDGER_A_COLUMNS = ['txnId', 'amount', 'date', 'refId', 'description'];
 const LEDGER_B_COLUMNS = ['statementId', 'amount', 'date', 'refId', 'narration'];
-
-function parseCsvBuffer(buffer) {
-  return parse(buffer, { columns: true, skip_empty_lines: true, trim: true });
-}
-
 const AMOUNT_PATTERN = /^-?\d+(\.\d{1,2})?$/;
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/; // strictly YYYY-MM-DD — rejects ambiguous DD/MM vs MM/DD formats
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
-function validateRows(rows, requiredColumns, label) {
-  if (rows.length === 0) {
-    throw new Error(`${label} CSV has no rows`);
-  }
-  const headers = Object.keys(rows[0]);
-  const missing = requiredColumns.filter(c => !headers.includes(c));
-  if (missing.length > 0) {
-    throw new Error(`${label} CSV is missing required column(s): ${missing.join(', ')}. Expected headers: ${requiredColumns.join(', ')}`);
-  }
-  rows.forEach((row, i) => {
-    const rawAmount = String(row.amount ?? '').trim();
-    if (!AMOUNT_PATTERN.test(rawAmount)) {
-      throw new Error(
-        `${label} CSV row ${i + 2}: "amount" must be a plain number with no commas or currency symbols ` +
-        `(got "${row.amount}"). Example: 1200.00, not 1,200.00 or ₹1,200.00`
-      );
-    }
-    const rawDate = String(row.date ?? '').trim();
-    if (!DATE_PATTERN.test(rawDate)) {
-      throw new Error(
-        `${label} CSV row ${i + 2}: "date" must be in YYYY-MM-DD format (got "${row.date}"). ` +
-        `Formats like DD/MM/YYYY or MM/DD/YYYY are rejected because they can be misread as the wrong date.`
-      );
-    }
-    if (isNaN(new Date(rawDate).getTime())) {
-      throw new Error(`${label} CSV row ${i + 2}: "date" is not a real calendar date ("${row.date}")`);
-    }
+function getFileHash(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('md5');
+    const stream = fs.createReadStream(filePath);
+    stream.on('data', data => hash.update(data));
+    stream.on('end', () => resolve(hash.digest('hex')));
+    stream.on('error', reject);
   });
 }
 
-// POST /api/upload/:batchId  — multipart form with fields "ledgerA" and "ledgerB", each a CSV file
+async function processCsvFile(filePath, mapping, label, isLedgerA, batchId, Model) {
+  const parser = fs.createReadStream(filePath).pipe(parse({ columns: true, skip_empty_lines: true, trim: true }));
+  
+  let headersValidated = false;
+  let rowCount = 0;
+  let chunk = [];
+
+  for await (const row of parser) {
+    if (!headersValidated) {
+      const headers = Object.keys(row);
+      const requiredMappedKeys = Object.values(mapping);
+      const missing = requiredMappedKeys.filter(c => !headers.includes(c));
+      
+      if (missing.length > 0) {
+        throw new Error(`${label} CSV is missing mapped column(s): ${missing.join(', ')}. Found headers: ${headers.join(', ')}`);
+      }
+      headersValidated = true;
+    }
+
+    rowCount++;
+    const rawAmount = String(row[mapping.amount] ?? '').trim();
+    if (!AMOUNT_PATTERN.test(rawAmount)) {
+       throw new Error(`${label} CSV row ${rowCount + 1}: mapped "amount" column must be a plain number with no commas or currency symbols (got "${rawAmount}").`);
+    }
+    const rawDate = String(row[mapping.date] ?? '').trim();
+    if (!DATE_PATTERN.test(rawDate)) {
+       throw new Error(`${label} CSV row ${rowCount + 1}: mapped "date" column must be in YYYY-MM-DD format (got "${rawDate}").`);
+    }
+    if (isNaN(new Date(rawDate).getTime())) {
+       throw new Error(`${label} CSV row ${rowCount + 1}: mapped "date" column is not a real calendar date ("${rawDate}")`);
+    }
+
+    const doc = isLedgerA ? {
+      txnId: row[mapping.txnId], amount: parseFloat(rawAmount), date: new Date(rawDate),
+      refId: row[mapping.refId], description: row[mapping.description] || '', batchId
+    } : {
+      statementId: row[mapping.statementId], amount: parseFloat(rawAmount), date: new Date(rawDate),
+      refId: row[mapping.refId], narration: row[mapping.narration] || '', batchId
+    };
+
+    chunk.push(doc);
+
+    // Batch insert every 1000 records to keep memory flat
+    if (chunk.length >= 1000) {
+      await Model.insertMany(chunk);
+      chunk = [];
+    }
+  }
+
+  if (chunk.length > 0) {
+    await Model.insertMany(chunk);
+  }
+
+  if (rowCount === 0) {
+    throw new Error(`${label} CSV has no rows`);
+  }
+
+  return rowCount;
+}
+
 router.post('/upload/:batchId', upload.fields([{ name: 'ledgerA', maxCount: 1 }, { name: 'ledgerB', maxCount: 1 }]), async (req, res) => {
   const { batchId } = req.params;
+  let ledgerAPath = null;
+  let ledgerBPath = null;
+  
   try {
+    const batch = await Batch.findOne({ name: batchId });
+    if (!batch) {
+      return res.status(404).json({ error: 'Batch not found. Please create or select a batch first.' });
+    }
+
     if (!req.files?.ledgerA || !req.files?.ledgerB) {
       return res.status(400).json({ error: 'Both ledgerA and ledgerB CSV files are required' });
     }
+    
+    if (!req.body.mappingA || !req.body.mappingB) {
+      return res.status(400).json({ error: 'Column mapping configuration is required' });
+    }
 
-    const aRows = parseCsvBuffer(req.files.ledgerA[0].buffer);
-    const bRows = parseCsvBuffer(req.files.ledgerB[0].buffer);
+    const mappingA = JSON.parse(req.body.mappingA);
+    const mappingB = JSON.parse(req.body.mappingB);
 
-    validateRows(aRows, LEDGER_A_COLUMNS, 'Ledger A');
-    validateRows(bRows, LEDGER_B_COLUMNS, 'Ledger B');
+    ledgerAPath = req.files.ledgerA[0].path;
+    ledgerBPath = req.files.ledgerB[0].path;
 
-    // Same batchId = same reconciliation replaces any prior data for this batch (mirrors idempotent re-run)
+    // Check if files are identical using MD5 hash (memory efficient)
+    const [hashA, hashB] = await Promise.all([
+      getFileHash(ledgerAPath),
+      getFileHash(ledgerBPath)
+    ]);
+
+    // Validation 1: Identical Files
+    if (hashA === hashB && req.query.force !== 'true') {
+      return res.status(409).json({ 
+        error: 'Ledger A and Ledger B appear to contain identical source data. Reconciliation may produce artificially high match rates and may not represent a valid reconciliation scenario.',
+        requireConfirmation: true
+      });
+    }
+
+    // Prepare fresh state for this batch
     await LedgerA.deleteMany({ batchId });
     await LedgerB.deleteMany({ batchId });
 
-    const aDocs = aRows.map(r => ({
-      txnId: r.txnId, amount: parseFloat(r.amount), date: new Date(r.date),
-      refId: r.refId, description: r.description || '', batchId
-    }));
-    const bDocs = bRows.map(r => ({
-      statementId: r.statementId, amount: parseFloat(r.amount), date: new Date(r.date),
-      refId: r.refId, narration: r.narration || '', batchId
-    }));
+    // Validation 2: Stream parsing and insertion
+    // Run sequentially to ensure clear error reporting if one fails
+    const aCount = await processCsvFile(ledgerAPath, mappingA, 'Ledger A', true, batchId, LedgerA);
+    const bCount = await processCsvFile(ledgerBPath, mappingB, 'Ledger B', false, batchId, LedgerB);
 
-    await LedgerA.insertMany(aDocs);
-    await LedgerB.insertMany(bDocs);
+    batch.ledgerAFileName = req.files.ledgerA[0].originalname;
+    batch.ledgerBFileName = req.files.ledgerB[0].originalname;
+    batch.ledgerACount = aCount;
+    batch.ledgerBCount = bCount;
+    batch.status = 'uploaded';
+    await batch.save();
 
     res.json({
       success: true,
       batchId,
-      ledgerACount: aDocs.length,
-      ledgerBCount: bDocs.length,
+      ledgerACount: aCount,
+      ledgerBCount: bCount,
       message: 'Upload complete — run reconciliation on this batchId next'
     });
   } catch (err) {
+    // If stream parsing threw an error, clean up the partial database inserts
+    await LedgerA.deleteMany({ batchId });
+    await LedgerB.deleteMany({ batchId });
     res.status(400).json({ error: err.message });
+  } finally {
+    // Cleanup temporary files
+    if (ledgerAPath && fs.existsSync(ledgerAPath)) fs.unlinkSync(ledgerAPath);
+    if (ledgerBPath && fs.existsSync(ledgerBPath)) fs.unlinkSync(ledgerBPath);
   }
 });
 

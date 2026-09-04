@@ -29,3 +29,6 @@ Thumbs.db
 # misc
 .npm
 *.local
+
+ledgerA-test.csv
+ledgerB-test.csv

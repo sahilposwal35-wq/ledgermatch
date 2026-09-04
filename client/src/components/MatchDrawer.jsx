@@ -37,9 +37,9 @@ export default function MatchDrawer({ match, onClose, onResolved }) {
         <div className="drawer-header">
           <div>
             <div className="drawer-title">
-              <span className={`stamp stamp-${match.matchType}`} style={{ transform: 'rotate(-2deg)' }}>{MATCH_TYPE_LABEL[match.matchType] || match.matchType}</span>
+              <span className={`badge badge-${match.matchType}`}>{MATCH_TYPE_LABEL[match.matchType] || match.matchType}</span>
             </div>
-            <div style={{ color: 'var(--ink-faint)', fontSize: 12, marginTop: 6 }}>
+            <div style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 8 }}>
               {REASON_LABEL[match.reasonCode] || match.reasonCode}
             </div>
           </div>
@@ -48,11 +48,11 @@ export default function MatchDrawer({ match, onClose, onResolved }) {
 
         {match.ledgerAIds?.length > 0 && (
           <div className="drawer-section">
-            <div className="drawer-section-label">Ledger A (internal) — {match.ledgerAIds.length} txn{match.ledgerAIds.length > 1 ? 's' : ''}</div>
+            <div className="drawer-section-label">Ledger A (Internal) — {match.ledgerAIds.length} txn{match.ledgerAIds.length > 1 ? 's' : ''}</div>
             {match.ledgerAIds.map(a => (
               <div className="txn-card" key={a._id}>
                 <div className="txn-card-row"><span className="txn-label">Txn ID</span><span className="mono">{a.txnId}</span></div>
-                <div className="txn-card-row"><span className="txn-label">Amount</span><span className="amount">₹{formatAmount(a.amount)}</span></div>
+                <div className="txn-card-row"><span className="txn-label">Amount</span><span className="amount mono">₹{formatAmount(a.amount)}</span></div>
                 <div className="txn-card-row"><span className="txn-label">Date</span><span>{formatDate(a.date)}</span></div>
                 <div className="txn-card-row"><span className="txn-label">Ref</span><span className="mono">{a.refId}</span></div>
               </div>
@@ -62,11 +62,11 @@ export default function MatchDrawer({ match, onClose, onResolved }) {
 
         {match.ledgerBIds?.length > 0 && (
           <div className="drawer-section">
-            <div className="drawer-section-label">Ledger B (external) — {match.ledgerBIds.length} txn{match.ledgerBIds.length > 1 ? 's' : ''}</div>
+            <div className="drawer-section-label">Ledger B (External) — {match.ledgerBIds.length} txn{match.ledgerBIds.length > 1 ? 's' : ''}</div>
             {match.ledgerBIds.map(b => (
               <div className="txn-card" key={b._id}>
                 <div className="txn-card-row"><span className="txn-label">Statement ID</span><span className="mono">{b.statementId}</span></div>
-                <div className="txn-card-row"><span className="txn-label">Amount</span><span className="amount">₹{formatAmount(b.amount)}</span></div>
+                <div className="txn-card-row"><span className="txn-label">Amount</span><span className="amount mono">₹{formatAmount(b.amount)}</span></div>
                 <div className="txn-card-row"><span className="txn-label">Date</span><span>{formatDate(b.date)}</span></div>
                 <div className="txn-card-row"><span className="txn-label">Ref</span><span className="mono">{b.refId}</span></div>
               </div>
@@ -75,36 +75,42 @@ export default function MatchDrawer({ match, onClose, onResolved }) {
         )}
 
         <div className="drawer-section">
-          <div className="drawer-section-label">Maker-checker review</div>
+          <div className="drawer-section-label">Maker-Checker Review</div>
 
           {alreadyResolved ? (
             <div className="already-resolved">
-              <div style={{ marginBottom: 6 }}>
-                <strong style={{ color: match.status === 'resolved' ? 'var(--forest)' : 'var(--brick)' }}>
+              <div style={{ marginBottom: 8 }}>
+                <strong style={{ color: match.status === 'resolved' ? 'var(--status-success)' : 'var(--status-error)' }}>
                   {match.status === 'resolved' ? 'Resolved' : 'Rejected'}
                 </strong>
                 {' '}by {match.resolution?.resolvedBy || 'unknown'} on {formatDateTime(match.resolution?.resolvedAt)}
               </div>
-              <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic' }}>"{match.resolution?.reason}"</div>
+              <div style={{ color: 'var(--text-secondary)', fontStyle: 'italic' }}>"{match.resolution?.reason}"</div>
             </div>
           ) : (
             <>
-              <input
-                className="actor-input"
-                placeholder="Your name / reviewer ID"
-                value={actor}
-                onChange={e => setActor(e.target.value)}
-              />
-              <textarea
-                className="reason-input"
-                placeholder="Justification for this decision (required — written to the audit trail)"
-                value={reason}
-                onChange={e => setReason(e.target.value)}
-              />
-              {error && <div style={{ color: 'var(--brick)', fontSize: 12, marginTop: 8 }}>{error}</div>}
+              <div className="form-group">
+                <label>Reviewer Name / ID</label>
+                <input
+                  className="form-input"
+                  placeholder="e.g. jdoe"
+                  value={actor}
+                  onChange={e => setActor(e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label>Justification</label>
+                <textarea
+                  className="form-textarea"
+                  placeholder="Required justification for the audit trail..."
+                  value={reason}
+                  onChange={e => setReason(e.target.value)}
+                />
+              </div>
+              {error && <div className="error-banner" style={{ marginBottom: 0, marginTop: 16 }}>{error}</div>}
               <div className="resolve-actions">
-                <button className="btn-resolve" disabled={submitting} onClick={() => handleAction('resolved')}>
-                  {submitting ? 'Recording…' : 'Approve match'}
+                <button className="btn-approve" disabled={submitting} onClick={() => handleAction('resolved')}>
+                  {submitting ? 'Recording…' : 'Approve Match'}
                 </button>
                 <button className="btn-reject" disabled={submitting} onClick={() => handleAction('rejected')}>
                   {submitting ? 'Recording…' : 'Reject'}
