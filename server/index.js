@@ -5,10 +5,12 @@ const mongoose = require('mongoose');
 const reconciliationRoutes = require('./routes/reconciliation');
 const uploadRoutes = require('./routes/upload');
 const batchesRoutes = require('./routes/batches');
+const authRoutes = require('./routes/auth');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use('/api', authRoutes);
 app.use('/api', reconciliationRoutes);
 app.use('/api', uploadRoutes);
 app.use('/api', batchesRoutes);

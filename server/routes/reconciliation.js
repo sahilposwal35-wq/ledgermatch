@@ -7,12 +7,15 @@ const AuditLog = require('../models/AuditLog');
 const Batch = require('../models/Batch');
 const LedgerA = require('../models/LedgerA');
 const LedgerB = require('../models/LedgerB');
+const auth = require('../middleware/auth');
+
+router.use(auth);
 
 // POST /api/reconcile/:batchId  -> run (or re-run) reconciliation for a batch
 router.post('/reconcile/:batchId', async (req, res) => {
   try {
     const { batchId } = req.params;
-    const batch = await Batch.findOne({ name: batchId });
+    const batch = await Batch.findOne({ name: batchId, userId: req.user.id });
     
     if (!batch) {
       return res.status(404).json({ success: false, error: 'Batch not found. Please create or select a batch first.' });
@@ -47,6 +50,9 @@ router.post('/reconcile/:batchId', async (req, res) => {
 // GET matches (exceptions queue) with pagination
 router.get('/matches/:batchId', async (req, res) => {
   try {
+    const batch = await Batch.findOne({ name: req.params.batchId, userId: req.user.id });
+    if (!batch) return res.status(404).json({ error: 'Batch not found' });
+
     const { status, page = 1, limit = 50 } = req.query;
     const filter = { batchId: req.params.batchId };
     if (status) filter.status = status;
@@ -87,6 +93,9 @@ router.patch('/matches/:id/resolve', async (req, res) => {
     const match = await Match.findById(req.params.id);
     if (!match) return res.status(404).json({ error: 'match not found' });
 
+    const batch = await Batch.findOne({ name: match.batchId, userId: req.user.id });
+    if (!batch) return res.status(403).json({ error: 'unauthorized to resolve matches for this batch' });
+
     match.status = newStatus || 'resolved';
     match.resolution = { resolvedBy, reason, resolvedAt: new Date() };
     await match.save();
@@ -105,6 +114,9 @@ router.patch('/matches/:id/resolve', async (req, res) => {
 // GET /api/audit/:batchId -> full audit trail for a batch
 router.get('/audit/:batchId', async (req, res) => {
   try {
+    const batch = await Batch.findOne({ name: req.params.batchId, userId: req.user.id });
+    if (!batch) return res.status(403).json({ error: 'unauthorized' });
+
     const logs = await AuditLog.find({ batchId: req.params.batchId }).sort({ timestamp: 1 });
     res.json(logs);
   } catch (err) {
