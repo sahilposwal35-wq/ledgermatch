@@ -38,7 +38,12 @@ export default function UploadPanel({ batch, onUploaded }) {
   const [error, setError] = useState(null);
   const [warning, setWarning] = useState(null);
   const [result, setResult] = useState(null);
-  
+
+  // Store File objects in state so they survive when the select inputs are hidden.
+  // Reading refs at upload time fails on some browsers when the input is not rendered.
+  const [fileA, setFileA] = useState(null);
+  const [fileB, setFileB] = useState(null);
+
   const aRef = useRef(null);
   const bRef = useRef(null);
 
@@ -53,11 +58,15 @@ export default function UploadPanel({ batch, onUploaded }) {
     e.preventDefault();
     const aFile = aRef.current?.files?.[0];
     const bFile = bRef.current?.files?.[0];
-    
+
     if (!aFile || !bFile) {
       setError('Select both a Ledger A and a Ledger B CSV file.');
       return;
     }
+
+    // Save to state immediately before moving to map step
+    setFileA(aFile);
+    setFileB(bFile);
 
     try {
       const ha = await parseHeaders(aFile);
@@ -90,13 +99,19 @@ export default function UploadPanel({ batch, onUploaded }) {
 
   async function handleUpload(e, force = false) {
     if (e) e.preventDefault();
-    
+
     // Validate mapping
     const missingA = LEDGER_A_EXPECTED.filter(f => !mappingA[f.key]);
     const missingB = LEDGER_B_EXPECTED.filter(f => !mappingB[f.key]);
-    
+
     if (missingA.length > 0 || missingB.length > 0) {
       setError('Please map all required columns for both ledgers before uploading.');
+      return;
+    }
+
+    // Use files saved in state — refs lose the file when inputs are hidden in the map step
+    if (!fileA || !fileB) {
+      setError('Files were lost. Please go back and reselect both CSV files.');
       return;
     }
 
@@ -105,13 +120,12 @@ export default function UploadPanel({ batch, onUploaded }) {
     setWarning(null);
     setResult(null);
 
-    const aFile = aRef.current?.files?.[0];
-    const bFile = bRef.current?.files?.[0];
-
     try {
-      const res = await uploadCsvs(batch.name, aFile, bFile, mappingA, mappingB, force);
+      const res = await uploadCsvs(batch.name, fileA, fileB, mappingA, mappingB, force);
       setResult(res);
       setStep('select');
+      setFileA(null);
+      setFileB(null);
       if (aRef.current) aRef.current.value = '';
       if (bRef.current) bRef.current.value = '';
       onUploaded?.();

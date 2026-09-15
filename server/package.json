@@ -5,7 +5,8 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "seed": "node scripts/seed.js"
+    "seed": "node scripts/seed.js",
+    "test:self-approval": "node scripts/test-self-approval.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

@@ -5,13 +5,13 @@ function txnSummary(match) {
   const b = match.ledgerBIds?.[0];
   const amount = a?.amount ?? b?.amount;
   const date = a?.date ?? b?.date;
-  const ref = a?.refId ?? b?.refId ?? '—';
+  const ref = a?.refId ?? b?.refId ?? '-';
   return { amount, date, ref };
 }
 
 export default function LedgerTable({ matches, selectedId, onSelect, loading }) {
   if (loading) {
-    return <div className="empty-state">Loading records…</div>;
+    return <div className="empty-state">Loading records...</div>;
   }
 
   if (!matches || matches.length === 0) {
@@ -53,8 +53,8 @@ export default function LedgerTable({ matches, selectedId, onSelect, loading }) 
               </td>
               <td className="mono">{ref}</td>
               <td>{formatDate(date)}</td>
-              <td className="amount right">₹{formatAmount(amount)}{m.amountDelta ? ` (Δ${formatAmount(m.amountDelta)})` : ''}</td>
-              <td style={{ color: 'var(--text-secondary)' }}>{REASON_LABEL[m.reasonCode] || m.reasonCode || '—'}</td>
+              <td className="mono right">{formatAmount(amount)}{m.amountDelta ? ` (${m.amountDelta > 0 ? '+' : ''}${formatAmount(m.amountDelta)})` : ''}</td>
+              <td style={{ color: 'var(--text-secondary)' }}>{REASON_LABEL[m.reasonCode] || m.reasonCode || '-'}</td>
               <td>
                 <span className={`status-dot ${m.status}`}></span>
                 {m.status.replace('_', ' ')}

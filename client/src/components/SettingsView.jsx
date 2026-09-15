@@ -82,7 +82,6 @@ export default function SettingsView({ batch, onUpdate }) {
         <button type="submit" className="btn-primary" disabled={saving} style={{ width: 'fit-content', marginTop: '16px' }}>
           {saving ? 'Saving...' : 'Save Rules'}
         </button>
-
       </form>
     </div>
   );
