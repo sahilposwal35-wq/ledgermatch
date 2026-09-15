@@ -1,16 +1,25 @@
 /**
- * Generates a demo batch with controlled anomalies so reconciliation results
- * are impressive and deterministic:
- *  - ~70% exact matches
- *  - ~10% fuzzy (timing diff, 1-2 days apart)
- *  - ~5% split (batched settlement: 2 A txns = 1 B txn)
- *  - ~5% amount mismatch (rounding/fee deduction)
- *  - ~5% missing on B, ~5% missing on A
+ * Seeds the database with:
+ * 1. Two demo accounts (one maker, one checker) for testing the maker-checker flow
+ * 2. A demo batch with controlled anomalies so reconciliation results
+ *    are impressive and deterministic:
+ *     - ~70% exact matches
+ *     - ~10% fuzzy (timing diff, 1-2 days apart)
+ *     - ~5% split (batched settlement: 2 A txns = 1 B txn)
+ *     - ~5% amount mismatch (rounding/fee deduction)
+ *     - ~5% missing on B, ~5% missing on A
  *
  * Usage: node server/scripts/seed.js
+ *
+ * Demo Accounts:
+ *   Maker:   maker@demo.com   / password123
+ *   Checker: checker@demo.com / password123
  */
 require('dotenv').config();
 const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+const User = require('../models/User');
+const Batch = require('../models/Batch');
 const LedgerA = require('../models/LedgerA');
 const LedgerB = require('../models/LedgerB');
 
@@ -25,8 +34,35 @@ function randDate(base, offsetDays = 0) {
 
 async function seed() {
   await mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/ledgermatch');
+
+  // --- Seed demo users ---
+  const salt = await bcrypt.genSalt(10);
+  const hashedPassword = await bcrypt.hash('password123', salt);
+
+  const makerUser = await User.findOneAndUpdate(
+    { email: 'maker@demo.com' },
+    { email: 'maker@demo.com', password: hashedPassword, role: 'maker' },
+    { upsert: true, new: true }
+  );
+
+  await User.findOneAndUpdate(
+    { email: 'checker@demo.com' },
+    { email: 'checker@demo.com', password: hashedPassword, role: 'checker' },
+    { upsert: true, new: true }
+  );
+
+  console.log('Seeded demo accounts: maker@demo.com / checker@demo.com (password: password123)');
+
+  // --- Seed demo batch (owned by the maker) ---
   await LedgerA.deleteMany({ batchId: BATCH_ID });
   await LedgerB.deleteMany({ batchId: BATCH_ID });
+
+  // Create or update the batch, assigning it to the maker user
+  await Batch.findOneAndUpdate(
+    { name: BATCH_ID },
+    { name: BATCH_ID, createdBy: makerUser._id, status: 'created' },
+    { upsert: true, new: true }
+  );
 
   const aDocs = [];
   const bDocs = [];

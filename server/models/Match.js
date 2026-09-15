@@ -18,7 +18,9 @@ const matchSchema = new mongoose.Schema({
   amountDelta: { type: Number, default: 0 }, // difference if amount_mismatch
   reasonCode: { type: String }, // e.g. 'TIMING_DIFF', 'ROUNDING', 'MISSING_ON_B'
   resolution: {
-    resolvedBy: { type: String }, // maker-checker: who approved the override
+    // ObjectId reference to the User who approved/rejected — set from the JWT,
+    // never from a client-supplied free-text field
+    resolvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     reason: { type: String },     // mandatory justification for manual override
     resolvedAt: { type: Date }
   },

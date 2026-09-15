@@ -9,6 +9,7 @@ const LedgerA = require('../models/LedgerA');
 const LedgerB = require('../models/LedgerB');
 const Batch = require('../models/Batch');
 const auth = require('../middleware/auth');
+const requireRole = require('../middleware/roles');
 
 router.use(auth);
 
@@ -95,15 +96,23 @@ async function processCsvFile(filePath, mapping, label, isLedgerA, batchId, Mode
   return rowCount;
 }
 
-router.post('/upload/:batchId', upload.fields([{ name: 'ledgerA', maxCount: 1 }, { name: 'ledgerB', maxCount: 1 }]), async (req, res) => {
+// Only makers can upload CSVs, and only to batches they created.
+router.post('/upload/:batchId', requireRole('maker'), upload.fields([{ name: 'ledgerA', maxCount: 1 }, { name: 'ledgerB', maxCount: 1 }]), async (req, res) => {
   const { batchId } = req.params;
   let ledgerAPath = null;
   let ledgerBPath = null;
   
   try {
-    const batch = await Batch.findOne({ name: batchId, userId: req.user.id });
+    const batch = await Batch.findOne({ name: batchId });
     if (!batch) {
       return res.status(404).json({ error: 'Batch not found. Please create or select a batch first.' });
+    }
+
+    // Ownership check: only the batch creator can upload data.
+    // .toString() on both sides — a raw ObjectId compared with === against a string
+    // will silently and always evaluate false.
+    if (batch.createdBy.toString() !== req.user.id.toString()) {
+      return res.status(403).json({ error: 'Only the batch creator can upload data to this batch' });
     }
 
     if (!req.files?.ledgerA || !req.files?.ledgerB) {

@@ -10,7 +10,19 @@ const auditLogSchema = new mongoose.Schema({
     enum: ['AUTO_MATCH', 'MANUAL_OVERRIDE', 'REJECT', 'RECON_RUN_START', 'RECON_RUN_COMPLETE'],
     required: true
   },
-  actor: { type: String, default: 'system' }, // 'system' for auto actions, username for manual
+  // Split into two fields instead of a single overloaded string:
+  // - actorType distinguishes system-generated entries from user-initiated actions
+  // - actorId is a real User reference for traceability (null for system actions)
+  actorType: {
+    type: String,
+    enum: ['system', 'user'],
+    default: 'system'
+  },
+  actorId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
   reason: { type: String }, // mandatory for MANUAL_OVERRIDE / REJECT
   snapshot: { type: mongoose.Schema.Types.Mixed }, // frozen copy of relevant state at time of action
   timestamp: { type: Date, default: Date.now, immutable: true }

@@ -9,20 +9,21 @@ const JWT_SECRET = process.env.JWT_SECRET || 'ledger-secret-fallback-key';
 
 // @route   POST /api/auth/register
 router.post('/auth/register', async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, role } = req.body;
   try {
     let user = await User.findOne({ email });
     if (user) return res.status(400).json({ error: 'User already exists' });
 
-    user = new User({ email, password });
+    // Role defaults to 'maker' if not provided (enforced by the schema too)
+    user = new User({ email, password, role: role || 'maker' });
     const salt = await bcrypt.genSalt(10);
     user.password = await bcrypt.hash(password, salt);
     await user.save();
 
-    const payload = { user: { id: user.id } };
+    const payload = { user: { id: user.id, role: user.role } };
     jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' }, (err, token) => {
       if (err) throw err;
-      res.json({ token });
+      res.json({ token, role: user.role });
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -39,10 +40,10 @@ router.post('/auth/login', async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(400).json({ error: 'Invalid credentials' });
 
-    const payload = { user: { id: user.id } };
+    const payload = { user: { id: user.id, role: user.role } };
     jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' }, (err, token) => {
       if (err) throw err;
-      res.json({ token });
+      res.json({ token, role: user.role });
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
